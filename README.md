@@ -149,10 +149,28 @@ cd ~/moOde-adi-2-pro-volume-control
 sudo ./scripts/install-c-daemon.sh
 ```
 
-For ADI-2 DAC or different output:
+**Installation options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--device-id ID` | `0x71`=DAC, `0x72`=Pro, `0x73`=Pro SE | `0x72` |
+| `--output TYPE` | `line` or `phones` | `line` |
+| `--min-db DB` | Volume at 0% | `-70` |
+| `--max-db DB` | Volume at 100% | `-15` |
+| `--no-moode` | Skip moOde database config | |
+| `--uninstall` | Remove installation | |
+
+Examples:
 
 ```bash
+# ADI-2 DAC with headphone output
 sudo ./scripts/install-c-daemon.sh --device-id 0x71 --output phones
+
+# Custom volume range (-60 dB to -10 dB)
+sudo ./scripts/install-c-daemon.sh --min-db -60 --max-db -10
+
+# For sensitive headphones (quieter max)
+sudo ./scripts/install-c-daemon.sh --max-db -25
 ```
 
 ### Manual Build and Install
