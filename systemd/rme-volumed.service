@@ -1,0 +1,24 @@
+[Unit]
+Description=RME ADI-2 Pro Volume Daemon
+Documentation=https://github.com/youruser/rme-adi2-moode
+After=mpd.service sound.target
+Wants=mpd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rme-volumed.py --config /etc/rme-volumed.conf
+Restart=always
+RestartSec=5
+
+# Run as mpd user for proper permissions
+User=mpd
+Group=audio
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=RME ADI-2 ALSA Control Bridge
+Documentation=https://github.com/JendaT/moOde-adi-2-pro-volume-control
+After=sound.target
+Before=mpd.service
+
+[Service]
+Type=simple
+# Auto-detect card and MIDI port by name
+ExecStart=/usr/local/bin/rme-adi2-ctl --card ADI-2 --device 0x72 --output line --max-db -15
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
