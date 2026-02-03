@@ -279,7 +279,6 @@ static int read_control_value(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
 /* Main monitoring loop */
 static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *midi)
 {
-    struct pollfd pfd;
     int err;
     int last_value = -1;
 
@@ -290,13 +289,14 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
         return err;
     }
 
-    /* Get poll descriptor */
+    /* Get poll descriptors */
     int count = snd_ctl_poll_descriptors_count(ctl);
-    if (count != 1) {
-        log_error("Unexpected poll descriptor count: %d", count);
+    if (count <= 0) {
+        log_error("Invalid poll descriptor count: %d", count);
         return -1;
     }
-    snd_ctl_poll_descriptors(ctl, &pfd, 1);
+    struct pollfd pfd[count];
+    snd_ctl_poll_descriptors(ctl, pfd, count);
 
     /* Read and send initial value */
     int value = read_control_value(ctl, id);
@@ -308,7 +308,7 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
     log_info("Monitoring control '%s' for changes...", CONTROL_NAME);
 
     while (running) {
-        err = poll(&pfd, 1, 1000);  /* 1 second timeout */
+        err = poll(pfd, count, -1);  /* Block until event or signal */
         if (err < 0) {
             if (errno == EINTR)
                 continue;
@@ -316,12 +316,9 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
             break;
         }
 
-        if (err == 0)
-            continue;  /* Timeout - check running flag */
-
         /* Check poll result */
         unsigned short revents;
-        snd_ctl_poll_descriptors_revents(ctl, &pfd, 1, &revents);
+        snd_ctl_poll_descriptors_revents(ctl, pfd, count, &revents);
         if (!(revents & POLLIN))
             continue;
 
@@ -346,6 +343,7 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
                 send_volume(midi, value);
                 last_value = value;
             }
+            break;  /* Process one event per poll, then check running flag */
         }
     }
 
