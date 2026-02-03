@@ -1,0 +1,7 @@
+# Restart rme-adi2-ctl daemon when RME ADI-2 is connected
+# This handles the case where the ADI-2 is powered off and back on
+#
+# RME USB Vendor ID: 2a39
+# Triggers on sound subsystem to ensure ALSA card is ready
+
+ACTION=="add", SUBSYSTEM=="sound", ATTRS{idVendor}=="2a39", TAG+="systemd", RUN+="/bin/systemctl restart rme-adi2-ctl.service"

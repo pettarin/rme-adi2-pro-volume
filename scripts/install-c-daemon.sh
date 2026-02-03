@@ -88,6 +88,8 @@ if [[ $UNINSTALL -eq 1 ]]; then
     systemctl disable rme-adi2-ctl 2>/dev/null || true
     rm -f /etc/systemd/system/rme-adi2-ctl.service
     rm -f /usr/local/bin/rme-adi2-ctl
+    rm -f /etc/udev/rules.d/99-rme-adi2.rules
+    udevadm control --reload-rules 2>/dev/null || true
     systemctl daemon-reload
     echo "Uninstalled."
     exit 0
@@ -158,6 +160,13 @@ if [[ $CONFIGURE_MOODE -eq 1 ]] && [[ -f /var/local/www/db/moode-sqlite3.db ]]; 
         "UPDATE cfg_mpd SET value='hardware' WHERE param='mixer_type';"
     sqlite3 /var/local/www/db/moode-sqlite3.db \
         "UPDATE cfg_mpd SET value='ADI2' WHERE param='mixer_control';"
+fi
+
+# Install udev rule for hotplug support
+echo "Installing udev rule for hotplug..."
+if [[ -f "$PROJECT_DIR/udev/99-rme-adi2.rules" ]]; then
+    cp "$PROJECT_DIR/udev/99-rme-adi2.rules" /etc/udev/rules.d/
+    udevadm control --reload-rules
 fi
 
 # Enable and start
