@@ -140,12 +140,12 @@ amidi -l
 
 ```bash
 # On your computer
-git clone https://github.com/JendaT/moOde-adi-2-pro-volume-control.git
-scp -r moOde-adi-2-pro-volume-control your-moode-device:~/
+git clone https://github.com/JendaT/rme-adi-2-pro-volume.git
+scp -r rme-adi-2-pro-volume your-moode-device:~/
 
 # SSH to device and install
 ssh your-moode-device
-cd ~/moOde-adi-2-pro-volume-control
+cd ~/rme-adi-2-pro-volume
 sudo ./scripts/install-c-daemon.sh
 ```
 
@@ -236,12 +236,12 @@ Use this if you can't compile the C daemon or prefer simpler setup.
 
 ```bash
 # On your computer
-git clone https://github.com/JendaT/moOde-adi-2-pro-volume-control.git
-scp -r moOde-adi-2-pro-volume-control your-moode-device:~/
+git clone https://github.com/JendaT/rme-adi-2-pro-volume.git
+scp -r rme-adi-2-pro-volume your-moode-device:~/
 
 # SSH to device and install
 ssh your-moode-device
-cd ~/moOde-adi-2-pro-volume-control
+cd ~/rme-adi-2-pro-volume
 
 sudo cp daemon/rme-volumed.py /usr/local/bin/
 sudo chmod +x /usr/local/bin/rme-volumed.py

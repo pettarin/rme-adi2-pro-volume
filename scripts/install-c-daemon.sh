@@ -132,7 +132,7 @@ echo "Installing systemd service..."
 cat > /etc/systemd/system/rme-adi2-ctl.service << EOF
 [Unit]
 Description=RME ADI-2 ALSA Control Bridge
-Documentation=https://github.com/JendaT/moOde-adi-2-pro-volume-control
+Documentation=https://github.com/JendaT/rme-adi-2-pro-volume
 After=sound.target
 Before=mpd.service
 

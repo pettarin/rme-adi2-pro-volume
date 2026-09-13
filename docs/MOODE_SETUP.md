@@ -33,8 +33,8 @@ moOde UI / UPnP App
 On your computer:
 
 ```bash
-git clone https://github.com/JendaT/moOde-adi-2-pro-volume-control.git
-scp -r moOde-adi-2-pro-volume-control your-moode-device:~/rme-adi2-moode
+git clone https://github.com/JendaT/rme-adi-2-pro-volume.git
+scp -r rme-adi-2-pro-volume your-moode-device:~/rme-adi2-moode
 ```
 
 ### Step 2: Verify MIDI Access
