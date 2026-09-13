@@ -24,7 +24,7 @@
 #define SWITCH_NAME         "ADI2 Playback Switch"
 
 #define DEFAULT_CARD        "ADI-2"
-#define DEFAULT_DEVICE_ID   0x71
+#define DEFAULT_DEVICE_ID   0x72
 
 /* Volume ranges for the logical ALSA mixer and the actual ADI-2 device */
 #define VOL_MIN             0           /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
