@@ -31,7 +31,7 @@
 #define VOL_MAX             600         /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
 #define VOL_DEFAULT         300         /* Default volume for the logical ALSA mixer: 50% */
 #define VOL_MIN_DB          (-70.0)     /* Min level in dB on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
-#define VOL_MAX_DB          (-10.0)     /* Max level in dB on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
+#define VOL_MAX_DB          (-15.0)     /* Max level in dB on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
 
 /* RME device IDs */
 #define RME_DEVICE_DAC      0x71
