@@ -1,7 +1,8 @@
 /*
  * rme-adi2-ctl - ALSA control bridge for RME ADI-2 Pro/DAC
  *
- * Creates a user control on the sound card that MPD can use as hardware mixer.
+ * Creates a playback volume and a playback switch user control on the sound
+ * card that MPD/Volumio can use as hardware mixer (simple control "ADI2").
  * Monitors control changes and sends MIDI SysEx to the ADI-2 device.
  *
  * This enables bit-perfect audio with hardware volume control.
@@ -17,14 +18,20 @@
 #include <errno.h>
 #include <alsa/asoundlib.h>
 
-#define CONTROL_NAME "ADI2"
-#define DEFAULT_CARD "ADI-2"
-#define DEFAULT_DEVICE_ID 0x72
+/* The simple mixer name seen by amixer/MPD/Volumio is the common prefix: "ADI2" */
+#define CONTROL_NAME "ADI2 Playback Volume"
+#define SWITCH_NAME  "ADI2 Playback Switch"
 
-/* Volume range: 0-600 representing -60.0 to 0.0 dB (0.1 dB steps) */
-#define VOL_MIN 0
-#define VOL_MAX 600
-#define VOL_DEFAULT 300  /* -30 dB */
+#define DEFAULT_CARD "ADI-2"
+#define DEFAULT_DEVICE_ID 0x71
+
+/* Volume ranges for the logical ALSA mixer and the actual ADI-2 device */
+#define VOL_MIN 0               /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
+#define VOL_MAX 600             /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
+#define VOL_DEFAULT 300         /* Default volume for the logical ALSA mixer: 50% */
+#define VOL_MIN_DB (-70.0)      /* Min volume on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
+#define VOL_MAX_DB (-10.0)      /* Max volume on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
+#define VOL_MUTE_DB (-114.0)    /* Lowest volume on the actual ADI-2 device, used to realize the "mute" functionality */
 
 /* RME device IDs */
 #define RME_DEVICE_DAC    0x71
@@ -45,6 +52,7 @@
 /* Global state */
 static volatile sig_atomic_t running = 1;
 static int verbose = 0;
+static int uninstall = 0;
 
 /* Configuration */
 static struct {
@@ -61,8 +69,8 @@ static struct {
     .midi_port = "",
     .device_id = DEFAULT_DEVICE_ID,
     .output_param = RME_PARAM_LINE,
-    .min_db = -70.0,
-    .max_db = -15.0,
+    .min_db = VOL_MIN_DB,
+    .max_db = VOL_MAX_DB,
 };
 
 static void signal_handler(int sig)
@@ -169,10 +177,9 @@ static void db_to_sysex_bytes(double dB, unsigned char *x, unsigned char *y)
     *y = raw & 0x7F;
 }
 
-/* Send volume to ADI-2 via MIDI SysEx */
-static int send_volume(snd_rawmidi_t *midi, int value)
+/* Send an absolute dB level to ADI-2 via MIDI SysEx */
+static int send_db(snd_rawmidi_t *midi, double dB)
 {
-    double dB = value_to_db(value);
     unsigned char x, y;
     db_to_sysex_bytes(dB, &x, &y);
 
@@ -186,8 +193,8 @@ static int send_volume(snd_rawmidi_t *midi, int value)
         0xF7                    /* SysEx end */
     };
 
-    log_verbose("Volume %d -> %.1f dB -> SysEx: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                value, dB,
+    log_verbose("%.1f dB -> SysEx: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                dB,
                 sysex[0], sysex[1], sysex[2], sysex[3], sysex[4],
                 sysex[5], sysex[6], sysex[7], sysex[8], sysex[9]);
 
@@ -196,59 +203,127 @@ static int send_volume(snd_rawmidi_t *midi, int value)
         log_error("MIDI write failed: %s", snd_strerror(written));
         return -1;
     }
-
-    log_info("Volume: %.1f dB", dB);
     return 0;
 }
 
-/* Create user control on the card */
-static int create_control(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
+/* Send control value (0-600) as volume to ADI-2 */
+static int send_volume(snd_rawmidi_t *midi, int value)
+{
+    double dB = value_to_db(value);
+    int err = send_db(midi, dB);
+    if (err == 0)
+        log_info("Volume: %.1f dB", dB);
+    return err;
+}
+
+/* Mute: send the lowest level the device accepts (-114 dB).
+ * RME_PARAM_MUTE exists but its value encoding is not implemented here.
+ */
+static int send_mute(snd_rawmidi_t *midi)
+{
+    int err = send_db(midi, VOL_MUTE_DB);
+    if (err == 0)
+        log_info("Muted");
+    return err;
+}
+
+/* Remove a mixer user control by name. Returns 1 if it was removed. */
+static int remove_control_by_name(snd_ctl_t *ctl, const char *name)
+{
+    snd_ctl_elem_id_t *id;
+    snd_ctl_elem_id_alloca(&id);
+    snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+    snd_ctl_elem_id_set_name(id, name);
+    if (snd_ctl_elem_remove(ctl, id) < 0)
+        return 0;
+    log_verbose("Removed control '%s'", name);
+    return 1;
+}
+
+/* --uninstall: remove every ADI2 control from the card and leave the
+ * device alone otherwise (no MIDI is sent, nothing else is touched).
+ */
+static int uninstall_controls(snd_ctl_t *ctl)
+{
+    static const char *names[] = { SWITCH_NAME, CONTROL_NAME };
+    int removed = 0;
+
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        removed += remove_control_by_name(ctl, names[i]);
+
+    log_info("Removed %d ADI2 control(s) from card %d", removed, config.card_num);
+    return 0;
+}
+
+/* Create a user control on the card.
+ * is_switch == 0: integer playback volume (VOL_MIN..VOL_MAX)
+ * is_switch != 0: boolean playback switch (mute)
+ */
+static int add_elem(snd_ctl_t *ctl, snd_ctl_elem_id_t *id,
+                    const char *name, int is_switch)
 {
     snd_ctl_elem_info_t *info;
+    snd_ctl_elem_value_t *value;
     int err;
 
     snd_ctl_elem_info_alloca(&info);
 
     /* Set up element ID */
     snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
-    snd_ctl_elem_id_set_name(id, CONTROL_NAME);
+    snd_ctl_elem_id_set_name(id, name);
 
     /* Check if control already exists */
     snd_ctl_elem_info_set_id(info, id);
     err = snd_ctl_elem_info(ctl, info);
     if (err == 0) {
         /* Control exists - try to remove it first */
-        log_verbose("Removing existing control");
+        log_verbose("Removing existing control '%s'", name);
         snd_ctl_elem_remove(ctl, id);
     }
 
-    /* Create new integer control */
+    /* Create new control */
     snd_ctl_elem_info_set_id(info, id);
-    err = snd_ctl_add_integer_elem_set(ctl, info, 1, 1, VOL_MIN, VOL_MAX, 1);
+    if (is_switch)
+        err = snd_ctl_add_boolean_elem_set(ctl, info, 1, 1);
+    else
+        err = snd_ctl_add_integer_elem_set(ctl, info, 1, 1, VOL_MIN, VOL_MAX, 1);
     if (err < 0) {
-        log_error("Failed to create control: %s", snd_strerror(err));
+        log_error("Failed to create control '%s': %s", name, snd_strerror(err));
         return err;
     }
 
-    /* Get the assigned element number */
+    /* Get the assigned element number.
+     * Look the element up again by name: when a 32-bit userland runs on a
+     * 64-bit kernel (e.g. Volumio on Raspberry Pi) the compat ioctl path does
+     * not copy the assigned numid back, so the id in 'info' still says 0.
+     */
+    snd_ctl_elem_id_set_numid(id, 0);
+    snd_ctl_elem_info_set_id(info, id);
+    err = snd_ctl_elem_info(ctl, info);
+    if (err < 0) {
+        log_error("Cannot look up created control '%s': %s", name, snd_strerror(err));
+        return err;
+    }
     snd_ctl_elem_info_get_id(info, id);
-    log_verbose("Created control '%s' numid=%d", CONTROL_NAME,
+    log_verbose("Created control '%s' numid=%u", name,
                 snd_ctl_elem_id_get_numid(id));
 
     /* NOTE: We intentionally do NOT set TLV (dB scale info).
-     * Without TLV, MPD/moOde treats the control as linear percentage,
+     * Without TLV, MPD/moOde/Volumio treat the control as linear percentage,
      * and our daemon maps linearly to the configured dB range.
      * This gives intuitive control where 50% = halfway between min and max dB.
      */
 
     /* Set initial value */
-    snd_ctl_elem_value_t *value;
     snd_ctl_elem_value_alloca(&value);
     snd_ctl_elem_value_set_id(value, id);
-    snd_ctl_elem_value_set_integer(value, 0, VOL_DEFAULT);
+    if (is_switch)
+        snd_ctl_elem_value_set_boolean(value, 0, 1);   /* start unmuted */
+    else
+        snd_ctl_elem_value_set_integer(value, 0, VOL_DEFAULT);
     err = snd_ctl_elem_write(ctl, value);
     if (err < 0) {
-        log_error("Failed to set initial value: %s", snd_strerror(err));
+        log_error("Failed to set initial value of '%s': %s", name, snd_strerror(err));
     }
 
     /* Unlock the control so other processes can write to it */
@@ -258,6 +333,16 @@ static int create_control(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
     }
 
     return 0;
+}
+
+/* Does a control event refer to the given element? */
+static int event_matches(snd_ctl_event_t *event, snd_ctl_elem_id_t *id)
+{
+    unsigned int numid = snd_ctl_elem_id_get_numid(id);
+    if (numid != 0)
+        return snd_ctl_event_elem_get_numid(event) == numid;
+    return snd_ctl_event_elem_get_interface(event) == snd_ctl_elem_id_get_interface(id) &&
+           strcmp(snd_ctl_event_elem_get_name(event), snd_ctl_elem_id_get_name(id)) == 0;
 }
 
 /* Read current control value */
@@ -276,11 +361,41 @@ static int read_control_value(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
     return snd_ctl_elem_value_get_integer(value, 0);
 }
 
+/* Read current switch value (1 = on/unmuted, 0 = off/muted).
+ * On read error assume unmuted so audio is never silently lost.
+ */
+static int read_switch_value(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
+{
+    snd_ctl_elem_value_t *value;
+    snd_ctl_elem_value_alloca(&value);
+    snd_ctl_elem_value_set_id(value, id);
+
+    int err = snd_ctl_elem_read(ctl, value);
+    if (err < 0) {
+        log_error("Failed to read switch: %s", snd_strerror(err));
+        return 1;
+    }
+
+    return snd_ctl_elem_value_get_boolean(value, 0) ? 1 : 0;
+}
+
+/* Push the current volume/switch state to the device */
+static void apply_state(snd_rawmidi_t *midi, int value, int on)
+{
+    if (on)
+        send_volume(midi, value);
+    else
+        send_mute(midi);
+}
+
 /* Main monitoring loop */
-static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *midi)
+static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *vol_id,
+                        snd_ctl_elem_id_t *sw_id, snd_rawmidi_t *midi)
 {
     int err;
     int last_value = -1;
+    int last_on = -1;
+    int on;
 
     /* Subscribe to control events */
     err = snd_ctl_subscribe_events(ctl, 1);
@@ -298,14 +413,17 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
     struct pollfd pfd[count];
     snd_ctl_poll_descriptors(ctl, pfd, count);
 
-    /* Read and send initial value */
-    int value = read_control_value(ctl, id);
+    /* Read and send initial state */
+    int value = read_control_value(ctl, vol_id);
+    on = read_switch_value(ctl, sw_id);
     if (value >= 0) {
-        send_volume(midi, value);
+        apply_state(midi, value, on);
         last_value = value;
+        last_on = on;
     }
 
-    log_info("Monitoring control '%s' for changes...", CONTROL_NAME);
+    log_info("Monitoring controls '%s' and '%s' for changes...",
+             CONTROL_NAME, SWITCH_NAME);
 
     while (running) {
         err = poll(pfd, count, -1);  /* Block until event or signal */
@@ -319,6 +437,14 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
         /* Check poll result */
         unsigned short revents;
         snd_ctl_poll_descriptors_revents(ctl, pfd, count, &revents);
+        if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            /* The card went away (device unplugged or powered off).
+             * Exit so the descriptors are released, the kernel can free the
+             * card slot, and systemd can restart us when the device returns.
+             */
+            log_error("Sound card disconnected");
+            return -1;
+        }
         if (!(revents & POLLIN))
             continue;
 
@@ -330,18 +456,17 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
             if (snd_ctl_event_get_type(event) != SND_CTL_EVENT_ELEM)
                 continue;
 
-            /* Check if it's our control */
-            unsigned int event_numid = snd_ctl_event_elem_get_numid(event);
-            unsigned int our_numid = snd_ctl_elem_id_get_numid(id);
-
-            if (event_numid != our_numid)
+            /* Check if it's one of our controls */
+            if (!event_matches(event, vol_id) && !event_matches(event, sw_id))
                 continue;
 
-            /* Read new value */
-            value = read_control_value(ctl, id);
-            if (value >= 0 && value != last_value) {
-                send_volume(midi, value);
+            /* Read new state */
+            value = read_control_value(ctl, vol_id);
+            on = read_switch_value(ctl, sw_id);
+            if (value >= 0 && (value != last_value || on != last_on)) {
+                apply_state(midi, value, on);
                 last_value = value;
+                last_on = on;
             }
             break;  /* Process one event per poll, then check running flag */
         }
@@ -353,38 +478,41 @@ static int monitor_loop(snd_ctl_t *ctl, snd_ctl_elem_id_t *id, snd_rawmidi_t *mi
 static void print_usage(const char *prog)
 {
     printf("Usage: %s [options]\n\n", prog);
-    printf("Creates an ALSA mixer control for RME ADI-2 hardware volume.\n\n");
+    printf("Creates an ALSA mixer control (\"ADI2\": playback volume + switch)\n"
+           "for RME ADI-2 hardware volume and mute.\n\n");
     printf("Options:\n");
     printf("  -c, --card NAME    Sound card name to search for (default: %s)\n", DEFAULT_CARD);
     printf("  -C, --card-num N   Use card number N directly\n");
     printf("  -m, --midi PORT    MIDI port (default: auto-detect)\n");
-    printf("  -d, --device ID    RME device ID: 71=DAC, 72=Pro, 73=Pro SE (default: 72)\n");
+    printf("  -d, --device ID    RME device ID: 0x71=DAC, 0x72=Pro, 0x73=Pro SE (default: 0x%x)\n", DEFAULT_DEVICE_ID);
     printf("  -o, --output TYPE  Output: line or phones (default: line)\n");
-    printf("      --min-db DB    Minimum dB (0%% volume) (default: -60.0)\n");
-    printf("      --max-db DB    Maximum dB (100%% volume) (default: -15.0)\n");
+    printf("      --min-db DB    Minimum dB (0%% volume) (default: %.1f)\n", config.min_db);
+    printf("      --max-db DB    Maximum dB (100%% volume) (default: %.1f)\n", config.max_db);
+    printf("  -u, --uninstall    Remove the ADI2 mixer controls from the card and exit\n");
     printf("  -v, --verbose      Verbose output\n");
     printf("  -h, --help         Show this help\n");
     printf("\nExample:\n");
-    printf("  %s --card ADI-2 --device 72 --max-db -20\n", prog);
+    printf("  %s --card ADI-2 --device 0x73 --output line --max-db -20\n", prog);
 }
 
 static int parse_args(int argc, char *argv[])
 {
     static struct option long_opts[] = {
-        {"card",     required_argument, 0, 'c'},
-        {"card-num", required_argument, 0, 'C'},
-        {"midi",     required_argument, 0, 'm'},
-        {"device",   required_argument, 0, 'd'},
-        {"output",   required_argument, 0, 'o'},
-        {"min-db",   required_argument, 0, 'n'},
-        {"max-db",   required_argument, 0, 'x'},
-        {"verbose",  no_argument,       0, 'v'},
-        {"help",     no_argument,       0, 'h'},
+        {"card",      required_argument, 0, 'c'},
+        {"card-num",  required_argument, 0, 'C'},
+        {"midi",      required_argument, 0, 'm'},
+        {"device",    required_argument, 0, 'd'},
+        {"output",    required_argument, 0, 'o'},
+        {"min-db",    required_argument, 0, 'n'},
+        {"max-db",    required_argument, 0, 'x'},
+        {"uninstall", no_argument,       0, 'u'},
+        {"verbose",   no_argument,       0, 'v'},
+        {"help",      no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "c:C:m:d:o:n:x:vh", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:C:m:d:o:n:x:uvh", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'c':
             strncpy(config.card_name, optarg, sizeof(config.card_name) - 1);
@@ -420,6 +548,9 @@ static int parse_args(int argc, char *argv[])
         case 'x':
             config.max_db = atof(optarg);
             break;
+        case 'u':
+            uninstall = 1;
+            break;
         case 'v':
             verbose = 1;
             break;
@@ -438,21 +569,29 @@ int main(int argc, char *argv[])
 {
     snd_ctl_t *ctl = NULL;
     snd_rawmidi_t *midi = NULL;
-    snd_ctl_elem_id_t *id;
+    snd_ctl_elem_id_t *vol_id;
+    snd_ctl_elem_id_t *sw_id;
     char card_hw[32];
     int err;
     int ret = 1;
+    int vol_created = 0;
+    int sw_created = 0;
 
-    snd_ctl_elem_id_alloca(&id);
+    snd_ctl_elem_id_alloca(&vol_id);
+    snd_ctl_elem_id_alloca(&sw_id);
 
     if (parse_args(argc, argv) < 0) {
         print_usage(argv[0]);
         return 1;
     }
 
-    /* Set up signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    /* Set up signal handlers (no SA_RESTART so poll() returns EINTR) */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     /* Find card */
     if (config.card_num < 0) {
@@ -464,6 +603,20 @@ int main(int argc, char *argv[])
     }
     log_info("Using card %d", config.card_num);
 
+    /* Open control device */
+    snprintf(card_hw, sizeof(card_hw), "hw:%d", config.card_num);
+    err = snd_ctl_open(&ctl, card_hw, 0);
+    if (err < 0) {
+        log_error("Cannot open control %s: %s", card_hw, snd_strerror(err));
+        goto cleanup;
+    }
+
+    /* Uninstall mode: remove our controls and stop here */
+    if (uninstall) {
+        ret = uninstall_controls(ctl) < 0 ? 1 : 0;
+        goto cleanup;
+    }
+
     /* Find MIDI port */
     if (config.midi_port[0] == '\0') {
         if (find_midi_port(config.card_num, config.midi_port,
@@ -474,14 +627,6 @@ int main(int argc, char *argv[])
     }
     log_info("Using MIDI port %s", config.midi_port);
 
-    /* Open control device */
-    snprintf(card_hw, sizeof(card_hw), "hw:%d", config.card_num);
-    err = snd_ctl_open(&ctl, card_hw, 0);
-    if (err < 0) {
-        log_error("Cannot open control %s: %s", card_hw, snd_strerror(err));
-        goto cleanup;
-    }
-
     /* Open MIDI output */
     err = snd_rawmidi_open(NULL, &midi, config.midi_port, 0);
     if (err < 0) {
@@ -489,27 +634,36 @@ int main(int argc, char *argv[])
         goto cleanup;
     }
 
-    /* Create control */
-    err = create_control(ctl, id);
+    /* Create controls: volume first, then switch */
+    err = add_elem(ctl, vol_id, CONTROL_NAME, 0);
     if (err < 0)
         goto cleanup;
+    vol_created = 1;
+    err = add_elem(ctl, sw_id, SWITCH_NAME, 1);
+    if (err < 0)
+        goto cleanup;
+    sw_created = 1;
 
     log_info("RME ADI-2 control bridge started");
     log_info("Device ID: 0x%02X, Output: %s",
              config.device_id,
              config.output_param == RME_PARAM_LINE ? "line" : "phones");
 
-    /* Run monitoring loop */
-    monitor_loop(ctl, id, midi);
+    /* Run monitoring loop; a negative result means the card went away */
+    err = monitor_loop(ctl, vol_id, sw_id, midi);
 
     log_info("Shutting down...");
-    ret = 0;
+    ret = (err < 0) ? 1 : 0;
 
 cleanup:
-    /* Remove control before closing */
-    if (ctl && snd_ctl_elem_id_get_numid(id) > 0) {
-        log_verbose("Removing control");
-        snd_ctl_elem_remove(ctl, id);
+    /* Remove controls before closing */
+    if (ctl && sw_created) {
+        log_verbose("Removing control '%s'", SWITCH_NAME);
+        snd_ctl_elem_remove(ctl, sw_id);
+    }
+    if (ctl && vol_created) {
+        log_verbose("Removing control '%s'", CONTROL_NAME);
+        snd_ctl_elem_remove(ctl, vol_id);
     }
 
     if (midi)

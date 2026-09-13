@@ -27,3 +27,6 @@ Thumbs.db
 *.tmp
 *.log
 *.bak
+
+# C daemon binary
+alsa-plugin/rme-adi2-ctl
