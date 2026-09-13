@@ -22,16 +22,16 @@
 #define CONTROL_NAME "ADI2 Playback Volume"
 #define SWITCH_NAME  "ADI2 Playback Switch"
 
-#define DEFAULT_CARD "ADI-2"
+#define DEFAULT_CARD      "ADI-2"
 #define DEFAULT_DEVICE_ID 0x71
 
 /* Volume ranges for the logical ALSA mixer and the actual ADI-2 device */
-#define VOL_MIN 0               /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
-#define VOL_MAX 600             /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
-#define VOL_DEFAULT 300         /* Default volume for the logical ALSA mixer: 50% */
-#define VOL_MIN_DB (-70.0)      /* Min volume on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
-#define VOL_MAX_DB (-10.0)      /* Max volume on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
-#define VOL_MUTE_DB (-114.0)    /* Lowest volume on the actual ADI-2 device, used to realize the "mute" functionality */
+#define VOL_MIN     0           /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
+#define VOL_MAX     400         /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
+#define VOL_DEFAULT 200         /* Default volume for the logical ALSA mixer: 50% */
+#define VOL_MIN_DB  (-50.0)     /* Min level in dB on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
+#define VOL_MAX_DB  (-10.0)     /* Max level in dB on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
+#define VOL_MUTE_DB (-114.0)    /* Lowest level in dB on the actual ADI-2 device, used to realize the "mute" functionality */
 
 /* RME device IDs */
 #define RME_DEVICE_DAC    0x71
@@ -206,7 +206,7 @@ static int send_db(snd_rawmidi_t *midi, double dB)
     return 0;
 }
 
-/* Send control value (0-600) as volume to ADI-2 */
+/* Send control value as volume to ADI-2 */
 static int send_volume(snd_rawmidi_t *midi, int value)
 {
     double dB = value_to_db(value);
@@ -577,13 +577,13 @@ int main(int argc, char *argv[])
     int vol_created = 0;
     int sw_created = 0;
 
-    snd_ctl_elem_id_alloca(&vol_id);
-    snd_ctl_elem_id_alloca(&sw_id);
-
     if (parse_args(argc, argv) < 0) {
         print_usage(argv[0]);
         return 1;
     }
+
+    snd_ctl_elem_id_alloca(&vol_id);
+    snd_ctl_elem_id_alloca(&sw_id);
 
     /* Set up signal handlers (no SA_RESTART so poll() returns EINTR) */
     struct sigaction sa;
