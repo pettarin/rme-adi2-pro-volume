@@ -23,6 +23,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Defaults
 DEVICE_ID="0x72"
+INSTALL_BUILD_DEPENDENCIES=1
 OUTPUT="line"
 MIN_DB="-70"
 MAX_DB="-15"
@@ -48,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             MAX_DB="$2"
             shift 2
             ;;
+        --no-install-build-dependencies)
+            INSTALL_BUILD_DEPENDENCIES=0
+            shift
+            ;;
         --no-moode)
             CONFIGURE_MOODE=0
             shift
@@ -60,12 +65,13 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: sudo $0 [options]"
             echo ""
             echo "Options:"
-            echo "  --device-id ID    RME device ID: 0x71=DAC, 0x72=Pro, 0x73=Pro SE"
-            echo "  --output TYPE     Output type: line or phones"
-            echo "  --min-db DB       Minimum dB at 0% volume (default: -60)"
-            echo "  --max-db DB       Maximum dB at 100% volume (default: -15)"
-            echo "  --no-moode        Skip moOde-specific configuration"
-            echo "  --uninstall       Remove installation"
+            echo "  --device-id ID                    RME device ID: 0x71=DAC, 0x72=Pro, 0x73=Pro SE (default: 0x72)"
+            echo "  --output TYPE                     Output type: line or phones"
+            echo "  --min-db DB                       Minimum dB at 0% volume (default: -70)"
+            echo "  --max-db DB                       Maximum dB at 100% volume (default: -15)"
+            echo "  --no-install-build-dependencies   Skip installing build dependencies"
+            echo "  --no-moode                        Skip moOde-specific configuration"
+            echo "  --uninstall                       Remove installation"
             exit 0
             ;;
         *)
@@ -105,16 +111,18 @@ echo "  Configure moOde: $([ $CONFIGURE_MOODE -eq 1 ] && echo yes || echo no)"
 echo ""
 
 # Install build dependencies
-echo "Installing build dependencies..."
-if command -v apt-get &>/dev/null; then
-    apt-get update -qq
-    apt-get install -y -qq build-essential libasound2-dev pkg-config
-elif command -v dnf &>/dev/null; then
-    dnf install -y gcc make alsa-lib-devel pkgconfig
-elif command -v pacman &>/dev/null; then
-    pacman -S --noconfirm gcc make alsa-lib pkgconf
-else
-    echo "Warning: Unknown package manager. Please install: gcc, make, libasound2-dev"
+if [[ $INSTALL_BUILD_DEPENDENCIES -eq 1 ]]; then
+    echo "Installing build dependencies..."
+    if command -v apt-get &>/dev/null; then
+        apt-get update -qq
+        apt-get install -y -qq build-essential libasound2-dev pkg-config
+    elif command -v dnf &>/dev/null; then
+        dnf install -y gcc make alsa-lib-devel pkgconfig
+    elif command -v pacman &>/dev/null; then
+        pacman -S --noconfirm gcc make alsa-lib pkgconf
+    else
+        echo "Warning: Unknown package manager. Please install: gcc, make, libasound2-dev"
+    fi
 fi
 
 # Build
