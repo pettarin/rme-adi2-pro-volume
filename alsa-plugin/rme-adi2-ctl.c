@@ -18,30 +18,33 @@
 #include <errno.h>
 #include <alsa/asoundlib.h>
 
-/* The simple mixer name seen by amixer/MPD/Volumio is the common prefix: "ADI2" */
-#define CONTROL_NAME "ADI2 Playback Volume"
-#define SWITCH_NAME  "ADI2 Playback Switch"
+/* The simple mixer name seen by amixer/MPD/Volumio is
+   the common prefix "ADI2" of the two elements */
+#define CONTROL_NAME        "ADI2 Playback Volume"
+#define SWITCH_NAME         "ADI2 Playback Switch"
 
-#define DEFAULT_CARD      "ADI-2"
-#define DEFAULT_DEVICE_ID 0x71
+#define DEFAULT_CARD        "ADI-2"
+#define DEFAULT_DEVICE_ID   0x71
 
 /* Volume ranges for the logical ALSA mixer and the actual ADI-2 device */
-#define VOL_MIN     0           /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
-#define VOL_MAX     400         /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
-#define VOL_DEFAULT 200         /* Default volume for the logical ALSA mixer: 50% */
-#define VOL_MIN_DB  (-50.0)     /* Min level in dB on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
-#define VOL_MAX_DB  (-10.0)     /* Max level in dB on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
-#define VOL_MUTE_DB (-114.0)    /* Lowest level in dB on the actual ADI-2 device, used to realize the "mute" functionality */
+#define VOL_MIN             0           /* Min volume for the logical ALSA mixer, mapped to VOL_MIN_DB on the actual ADI-2 device */
+#define VOL_MAX             600         /* Max volume for the logical ALSA mixer, mapped to VOL_MAX_DB on the actual ADI-2 device */
+#define VOL_DEFAULT         300         /* Default volume for the logical ALSA mixer: 50% */
+#define VOL_MIN_DB          (-70.0)     /* Min level in dB on the actual ADI-2 device mapped from VOL_MIN of the logical ALSA mixer */
+#define VOL_MAX_DB          (-10.0)     /* Max level in dB on the actual ADI-2 device mapped from VOL_MAX of the logical ALSA mixer */
 
 /* RME device IDs */
-#define RME_DEVICE_DAC    0x71
-#define RME_DEVICE_PRO    0x72
-#define RME_DEVICE_PRO_SE 0x73
+#define RME_DEVICE_DAC      0x71
+#define RME_DEVICE_PRO      0x72
+#define RME_DEVICE_PRO_SE   0x73
 
 /* RME output parameters */
-#define RME_PARAM_LINE   0x1B
-#define RME_PARAM_PHONES 0x4B
-#define RME_PARAM_MUTE   0x61
+#define RME_PARAM_LINE      0x1B
+#define RME_PARAM_PHONES    0x4B
+
+/* RME mute off/on value */
+#define RME_VALUE_MUTE_OFF  0x60
+#define RME_VALUE_MUTE_ON   0x61
 
 /* NOTE: We intentionally do NOT use TLV.
  * Without TLV, MPD treats the control as linear percentage (0-100%),
@@ -183,6 +186,21 @@ static int send_db(snd_rawmidi_t *midi, double dB)
     unsigned char x, y;
     db_to_sysex_bytes(dB, &x, &y);
 
+    /* Example: set -10.0 dB on line 1/2 on RME ADI 2/4 PRO SE
+
+       F0 00 20 0D 73 02 1B 1F 1C F7
+       -- -------- -- -- -- ----- --
+       ^  ^        ^  ^  ^  ^     ^
+       |  |        |  |  |  |     |
+       |  |        |  |  |  |     +- SysEx end (0xF7)
+       |  |        |  |  |  +- -10 db
+       |  |        |  |  +- line 1/2 (0x1B)
+       |  |        |  +- set (0x02)
+       |  |        +- ADI 2/4 PRO SE (0x73)
+       |  +- RME ID (0x00 0x20 0x0D)
+       +- SysEx start (0xF0)
+
+    */
     unsigned char sysex[] = {
         0xF0,                   /* SysEx start */
         0x00, 0x20, 0x0D,       /* RME manufacturer ID */
@@ -216,15 +234,46 @@ static int send_volume(snd_rawmidi_t *midi, int value)
     return err;
 }
 
-/* Mute: send the lowest level the device accepts (-114 dB).
- * RME_PARAM_MUTE exists but its value encoding is not implemented here.
- */
-static int send_mute(snd_rawmidi_t *midi)
+/* Send mute/unmute command to ADI-2 via MIDI SysEx */
+static int send_mute(snd_rawmidi_t *midi, unsigned char value)
 {
-    int err = send_db(midi, VOL_MUTE_DB);
-    if (err == 0)
-        log_info("Muted");
-    return err;
+    /* Example: mute line 1/2 on RME ADI 2/4 PRO SE
+
+       F0 00 20 0D 73 02 1B 61 00 F7
+       -- -------- -- -- -- ----- --
+       ^  ^        ^  ^  ^  ^     ^
+       |  |        |  |  |  |     |
+       |  |        |  |  |  |     +- SysEx end (0xF7)
+       |  |        |  |  |  +- mute (0x61 0x00)
+       |  |        |  |  +- line 1/2 (0x1B)
+       |  |        |  +- set (0x02)
+       |  |        +- ADI 2/4 PRO SE (0x73)
+       |  +- RME ID (0x00 0x20 0x0D)
+       +- SysEx start (0xF0)
+
+    */
+    unsigned char sysex[] = {
+        0xF0,                   /* SysEx start */
+        0x00, 0x20, 0x0D,       /* RME manufacturer ID */
+        config.device_id,       /* Device ID */
+        0x02,                   /* Command: set value */
+        config.output_param,    /* Parameter: output volume */
+        value,                  /* 0x60 = mute off (unmute), 0x61 = mute on (mute) */
+        0x00,                   /* Fixed */
+        0xF7                    /* SysEx end */
+    };
+
+    log_verbose("Mute %s -> SysEx: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                (value == RME_VALUE_MUTE_ON ? "on" : "off"),
+                sysex[0], sysex[1], sysex[2], sysex[3], sysex[4],
+                sysex[5], sysex[6], sysex[7], sysex[8], sysex[9]);
+
+    ssize_t written = snd_rawmidi_write(midi, sysex, sizeof(sysex));
+    if (written < 0) {
+        log_error("MIDI write failed: %s", snd_strerror(written));
+        return -1;
+    }
+    return 0;
 }
 
 /* Remove a mixer user control by name. Returns 1 if it was removed. */
@@ -382,10 +431,12 @@ static int read_switch_value(snd_ctl_t *ctl, snd_ctl_elem_id_t *id)
 /* Push the current volume/switch state to the device */
 static void apply_state(snd_rawmidi_t *midi, int value, int on)
 {
-    if (on)
+    if (on) {
+        send_mute(midi, RME_VALUE_MUTE_OFF);
         send_volume(midi, value);
-    else
-        send_mute(midi);
+    } else {
+        send_mute(midi, RME_VALUE_MUTE_ON);
+    }
 }
 
 /* Main monitoring loop */
