@@ -85,7 +85,7 @@ F0 00 20 0D [device_id] [command] [param] [data...] F7
 |-----------|------|-------------|
 | Line Out 1/2 | `0x1B` | Main line output volume |
 | Phones 3/4 | `0x4B` | Headphone output volume |
-| Mute | `0x61` | Mute control |
+| Mute | `0x60` | Mute control (applies per out channel, see below) |
 
 ### Volume Encoding
 
@@ -99,18 +99,26 @@ Y = raw_value & 0x7F
 
 Valid range: -114 dB to +6 dB
 
+Mute applies in the same way, independently for each output channel
+(line 1/2 or phones 3/4):
+
+```
+mute off: X = 0x60 and Y = 0x00
+mute on:  X = 0x60 and Y = 0x01
+```
+
 ### Example Commands
 
 ```bash
-# Set Line Out to -30 dB on ADI-2 Pro
+# Set Line Out (0x1B) to -30 dB on ADI-2 Pro (0x72)
 # raw = (-30 * 10) + 4096 = 3796 -> X=0x1D, Y=0x54
-amidi -p hw:0,0,0 -S "F0 00 20 0D 72 02 1B 1D 54 F7"
+amidi -p "hw:0,0,0" -S "F0 00 20 0D 72 02 1B 1D 54 F7"
 
-# Mute
-amidi -p hw:0,0,0 -S "F0 00 20 0D 72 02 61 00 01 F7"
+# Mute Line Out on ADI-2 Pro
+amidi -p "hw:0,0,0" -S "F0 00 20 0D 72 02 1B 60 01 F7"
 
-# Unmute
-amidi -p hw:0,0,0 -S "F0 00 20 0D 72 02 61 00 00 F7"
+# Unmute Line Out on ADI-2 Pro
+amidi -p "hw:0,0,0" -S "F0 00 20 0D 72 02 1B 60 00 F7"
 ```
 
 ---
