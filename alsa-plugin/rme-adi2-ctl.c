@@ -43,8 +43,9 @@
 #define RME_PARAM_PHONES    0x4B
 
 /* RME mute off/on value */
-#define RME_VALUE_MUTE_OFF  0x60
-#define RME_VALUE_MUTE_ON   0x61
+#define RME_PARAM_MUTE      0x60
+#define RME_VALUE_MUTE_OFF  0x00
+#define RME_VALUE_MUTE_ON   0x01
 
 /* NOTE: We intentionally do NOT use TLV.
  * Without TLV, MPD treats the control as linear percentage (0-100%),
@@ -239,12 +240,13 @@ static int send_mute(snd_rawmidi_t *midi, unsigned char value)
 {
     /* Example: mute line 1/2 on RME ADI 2/4 PRO SE
 
-       F0 00 20 0D 73 02 1B 61 00 F7
-       -- -------- -- -- -- ----- --
-       ^  ^        ^  ^  ^  ^     ^
-       |  |        |  |  |  |     |
-       |  |        |  |  |  |     +- SysEx end (0xF7)
-       |  |        |  |  |  +- mute (0x61 0x00)
+       F0 00 20 0D 73 02 1B 60 01 F7
+       -- -------- -- -- -- -- -- --
+       ^  ^        ^  ^  ^  ^  ^  ^
+       |  |        |  |  |  |  |  |
+       |  |        |  |  |  |  |  +- SysEx end (0xF7)
+       |  |        |  |  |  |  +- mute on (0x01)
+       |  |        |  |  |  +- mute parameter (0x60)
        |  |        |  |  +- line 1/2 (0x1B)
        |  |        |  +- set (0x02)
        |  |        +- ADI 2/4 PRO SE (0x73)
@@ -258,8 +260,8 @@ static int send_mute(snd_rawmidi_t *midi, unsigned char value)
         config.device_id,       /* Device ID */
         0x02,                   /* Command: set value */
         config.output_param,    /* Parameter: output volume */
-        value,                  /* 0x60 = mute off (unmute), 0x61 = mute on (mute) */
-        0x00,                   /* Fixed */
+        RME_PARAM_MUTE,         /* Parameter: mute */
+        value,                  /* 0x00 = off (unmute), 0x01 = on (mute) */
         0xF7                    /* SysEx end */
     };
 
